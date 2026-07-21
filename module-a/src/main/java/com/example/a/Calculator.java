@@ -13,6 +13,10 @@ public class Calculator {
         return a - b;
     }
 
+    public int multiply(int a, int b) {
+        return a * b;
+    }
+
     /**
      * Branch logic so coverage reports show both instruction and branch coverage.
      */
