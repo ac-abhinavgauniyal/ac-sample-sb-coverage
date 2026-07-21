@@ -10,7 +10,17 @@ name: PR Build
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened]
+    branches:
+      - dev
+      - qa
+      - release
+  pull_request_target:
+    # Cleanup runs here (not under `pull_request`) because a merge deletes the
+    # refs/pull/<n>/merge ref, which cancels any run bound to it. pull_request_target
+    # runs against the base branch ref, so it survives the merge. Safe because the
+    # cleanup job never checks out or executes PR code.
+    types: [closed]
     branches:
       - dev
       - qa
@@ -19,7 +29,9 @@ on:
     branches:
       - dev
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Group PR builds by PR number and branch pushes by ref, so a merge's push-to-dev
+  # run and the PR's cleanup run land in different groups and never cancel each other.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -28,7 +40,7 @@ permissions:
 
 jobs:
   detect-and-validate:
-    if: github.event.action != 'closed'
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
@@ -60,7 +72,7 @@ jobs:
 
   build:
     needs: detect-and-validate
-    if: github.event.action != 'closed'
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -166,8 +178,13 @@ jobs:
           fi
 
   cleanup-pages:
-    # When a PR is closed (merged or not), remove its preview folder from gh-pages.
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    # A merge deletes the PR merge ref, which would cancel a `pull_request: closed`
+    # run before it could clean up (observed in run 29815769094). Triggering via
+    # pull_request_target: [closed] runs against the base branch instead, so the
+    # cleanup survives the merge. Runs on any close (merged or abandoned) so no
+    # preview lingers; add `github.event.pull_request.merged == true` here to
+    # restrict to merges only.
+    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
