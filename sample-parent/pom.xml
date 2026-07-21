@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- Mirrors java-utils/armorcode-parent: inherits from Spring Boot, and
+         centrally declares the JaCoCo + surefire setup inherited by all modules. -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.4.7</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.example.sample</groupId>
+    <artifactId>sample-parent</artifactId>
+    <version>0.0.1</version>
+    <packaging>pom</packaging>
+    <name>sample-parent</name>
+    <description>Parent POM reproducing the java-utils coverage baseline (Java 21, Spring Boot 3.4.7, JaCoCo 0.8.11)</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <java.version>21</java.version>
+        <jacoco.version>0.8.11</jacoco.version>
+        <surefire.version>3.5.3</surefire.version>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                </configuration>
+            </plugin>
+
+            <!-- JaCoCo: prepare-agent + per-module report (inherited by all child modules).
+                 Same coordinates/version/bindings as java-utils. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- Default profile - skips tests by default (mirrors armorcode-parent 'default'). -->
+        <profile>
+            <id>default</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <properties>
+                <maven.test.skip>true</maven.test.skip>
+            </properties>
+        </profile>
+
+        <!-- Skip Tests Profile - active when runUtilTest is NOT set. -->
+        <profile>
+            <id>skip-tests</id>
+            <activation>
+                <property>
+                    <name>!runUtilTest</name>
+                </property>
+            </activation>
+            <properties>
+                <maven.test.skip>true</maven.test.skip>
+            </properties>
+        </profile>
+
+        <!-- Unit Tests Only Profile - activated with -DrunUtilTest. -->
+        <profile>
+            <id>run-tests</id>
+            <activation>
+                <property>
+                    <name>runUtilTest</name>
+                </property>
+            </activation>
+            <properties>
+                <maven.test.skip>false</maven.test.skip>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <version>${surefire.version}</version>
+                        <configuration>
+                            <argLine>
+                                @{argLine}
+                                -XX:+EnableDynamicAgentLoading
+                                --add-opens java.base/java.lang=ALL-UNNAMED
+                                --add-opens java.base/java.time=ALL-UNNAMED
+                            </argLine>
+                            <includes>
+                                <include>**/*UnitTest.java</include>
+                                <include>**/*UT.java</include>
+                                <include>**/*UTest.java</include>
+                            </includes>
+                            <excludes>
+                                <exclude>**/*IT.java</exclude>
+                                <exclude>**/*ITest.java</exclude>
+                                <exclude>**/*IntegrationTest.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Integration Tests Profile - activated with -Dutil-integration-test (mirrors java-utils CI). -->
+        <profile>
+            <id>util-integration-test</id>
+            <activation>
+                <property>
+                    <name>util-integration-test</name>
+                </property>
+            </activation>
+            <properties>
+                <maven.test.skip>false</maven.test.skip>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <version>${surefire.version}</version>
+                        <configuration>
+                            <argLine>
+                                @{argLine}
+                                -XX:+EnableDynamicAgentLoading
+                                --add-opens java.base/java.lang=ALL-UNNAMED
+                                --add-opens java.base/java.time=ALL-UNNAMED
+                            </argLine>
+                            <includes>
+                                <include>**/*UnitTest.java</include>
+                                <include>**/*UT.java</include>
+                                <include>**/*UTest.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>${surefire.version}</version>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <includes>
+                                <include>**/*IntegrationTest.java</include>
+                                <include>**/*IT.java</include>
+                                <include>**/*ITest.java</include>
+                            </includes>
+                            <argLine>
+                                --add-opens java.base/java.lang=ALL-UNNAMED
+                                --add-opens java.base/java.time=ALL-UNNAMED
+                            </argLine>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

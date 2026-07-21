@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <artifactId>ac-sample-sb-coverage</artifactId>
+    <packaging>pom</packaging>
+    <name>ac-sample-sb-coverage</name>
+    <description>Sample multi-module project reproducing the java-utils JaCoCo coverage setup</description>
+
+    <parent>
+        <groupId>com.example.sample</groupId>
+        <artifactId>sample-parent</artifactId>
+        <version>0.0.1</version>
+        <relativePath>./sample-parent</relativePath>
+    </parent>
+
+    <modules>
+        <module>module-a</module>
+        <module>module-b</module>
+        <!-- DO NOT ADD ANY MODULE BELOW THIS. COVERAGE-REPORT MUST BE THE LAST MODULE
+             AS IT AGGREGATES JACOCO COVERAGE DATA FROM ALL MODULES ABOVE.
+             WHEN ADDING A NEW MODULE, ALSO ADD IT AS A DEPENDENCY IN coverage-report/pom.xml.
+             CI WILL FAIL IF A MODULE IS MISSING FROM COVERAGE-REPORT DEPENDENCIES. -->
+        <module>coverage-report</module>
+    </modules>
+</project>

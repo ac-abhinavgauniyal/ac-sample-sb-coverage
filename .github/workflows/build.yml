@@ -1,0 +1,203 @@
+name: PR Build
+
+# Reproduces the coverage-relevant parts of java-utils/.github/workflows/build.yml:
+#   1. validate that every module is listed in coverage-report/pom.xml dependencies
+#   2. build with JDK 21 (Corretto) running tests + JaCoCo (per-module + aggregate)
+#   3. upload the aggregate JaCoCo report as a run artifact
+#   4. publish a browsable per-PR HTML preview to GitHub Pages (pr/<number>/) and
+#      link it from a PR comment; remove the preview when the PR is closed.
+# Uses only official actions + git/gh — no external server, no third-party service.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - dev
+      - qa
+      - release
+  push:
+    branches:
+      - dev
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write        # push the gh-pages branch
+  pull-requests: write   # post/update the PR comment
+
+jobs:
+  detect-and-validate:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate coverage-report module dependencies
+        run: |
+          # Every module in the root pom (except coverage-report) must appear as a
+          # dependency in coverage-report/pom.xml, or the aggregate report silently
+          # misses that module. Mirrors the java-utils CI guard.
+          MODULE_ARTIFACTS=""
+          for dir in $(grep '<module>' pom.xml | sed 's/.*<module>\(.*\)<\/module>.*/\1/' | grep -v 'coverage-report'); do
+            if [ -f "$dir/pom.xml" ]; then
+              artifact=$(sed '/<parent>/,/<\/parent>/d' "$dir/pom.xml" | grep -m1 '<artifactId>' | sed 's/.*<artifactId>\(.*\)<\/artifactId>.*/\1/')
+              MODULE_ARTIFACTS="$MODULE_ARTIFACTS$artifact"$'\n'
+            fi
+          done
+          MODULE_ARTIFACTS=$(echo "$MODULE_ARTIFACTS" | grep -v '^$' | sort)
+          DEPS=$(grep '<artifactId>' coverage-report/pom.xml | sed 's/.*<artifactId>\(.*\)<\/artifactId>.*/\1/' | grep -v 'ac-sample-sb-coverage\|jacoco-maven-plugin\|coverage-report' | sort)
+          MISSING=$(comm -23 <(echo "$MODULE_ARTIFACTS") <(echo "$DEPS"))
+          if [ -n "$MISSING" ]; then
+            echo "::error ::The following modules are missing from coverage-report/pom.xml dependencies:"
+            echo "$MISSING"
+            echo "Add them as <dependency> entries in coverage-report/pom.xml"
+            exit 1
+          fi
+          echo "All modules are included in coverage-report dependencies."
+
+  build:
+    needs: detect-and-validate
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'corretto'
+          java-version: 21
+          cache: 'maven'
+          cache-dependency-path: |
+            pom.xml
+            **/pom.xml
+
+      - name: Build with Maven (tests + JaCoCo per-module + aggregate)
+        run: mvn clean install -T 4 -q -Dutil-integration-test -Dsurefire.redirectTestOutputToFile=true
+
+      - name: Upload aggregate coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-aggregate-report
+          path: coverage-report/target/site/jacoco-aggregate/
+          if-no-files-found: warn
+
+      - name: Publish coverage preview to GitHub Pages
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          REPORT_DIR="coverage-report/target/site/jacoco-aggregate"
+          if [ ! -f "$REPORT_DIR/index.html" ]; then
+            echo "No aggregate report at $REPORT_DIR — skipping publish"
+            exit 0
+          fi
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          WORKTREE="$(mktemp -d)"
+          # Reuse the existing gh-pages branch, or start it as an orphan on first run.
+          if git ls-remote --exit-code --heads "$REMOTE" gh-pages >/dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages "$REMOTE" "$WORKTREE"
+          else
+            git clone --depth 1 "$REMOTE" "$WORKTREE"
+            ( cd "$WORKTREE" && git checkout --orphan gh-pages && git rm -rf . >/dev/null 2>&1 || true )
+          fi
+          cd "$WORKTREE"
+          touch .nojekyll   # stop Pages/Jekyll from dropping JaCoCo asset folders
+          rm -rf "pr/${PR_NUMBER}"
+          mkdir -p "pr/${PR_NUMBER}"
+          cp -R "${GITHUB_WORKSPACE}/${REPORT_DIR}/." "pr/${PR_NUMBER}/"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No coverage changes to publish"
+            exit 0
+          fi
+          git commit -m "coverage: PR #${PR_NUMBER} @ ${GITHUB_SHA:0:7}"
+          # Retry to tolerate concurrent PR runs pushing to gh-pages.
+          for i in 1 2 3 4 5; do
+            if git push origin gh-pages; then
+              echo "Published preview for PR #${PR_NUMBER}"
+              break
+            fi
+            echo "push rejected, rebasing (attempt $i)"
+            git pull --rebase origin gh-pages || true
+            sleep $((RANDOM % 5 + 1))
+          done
+
+      - name: Comment coverage preview link on PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          URL="https://${OWNER}.github.io/${REPO}/pr/${PR_NUMBER}/"
+          cat > /tmp/cov-comment.md <<EOF
+          <!-- coverage-pages-preview -->
+          ## 📊 Coverage report (PR #${PR_NUMBER})
+
+          Browse the full JaCoCo aggregate report for this PR:
+
+          **${URL}**
+
+          Published to GitHub Pages from commit ${GITHUB_SHA}. It can take up to a
+          minute to go live after the Pages deploy completes.
+          EOF
+          # Upsert: update the existing preview comment if present, else create one.
+          CID=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+            -q '[.[] | select(.body | startswith("<!-- coverage-pages-preview -->")) | .id][0]')
+          if [ -n "$CID" ] && [ "$CID" != "null" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${CID}" -F body=@/tmp/cov-comment.md
+          else
+            gh pr comment "$PR_NUMBER" --body-file /tmp/cov-comment.md
+          fi
+
+  cleanup-pages:
+    # When a PR is closed (merged or not), remove its preview folder from gh-pages.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Remove PR coverage preview
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if ! git ls-remote --exit-code --heads "$REMOTE" gh-pages >/dev/null 2>&1; then
+            echo "No gh-pages branch — nothing to clean"
+            exit 0
+          fi
+          WORKTREE="$(mktemp -d)"
+          git clone --depth 1 --branch gh-pages "$REMOTE" "$WORKTREE"
+          cd "$WORKTREE"
+          if [ ! -d "pr/${PR_NUMBER}" ]; then
+            echo "No preview folder for PR #${PR_NUMBER}"
+            exit 0
+          fi
+          git rm -rf "pr/${PR_NUMBER}" >/dev/null
+          git commit -m "coverage: cleanup PR #${PR_NUMBER}"
+          for i in 1 2 3 4 5; do
+            if git push origin gh-pages; then
+              echo "Removed preview for PR #${PR_NUMBER}"
+              break
+            fi
+            git pull --rebase origin gh-pages || true
+            sleep $((RANDOM % 5 + 1))
+          done
