@@ -19,6 +19,11 @@ class CalculatorUnitTest {
     }
 
     @Test
+    void multipliesTwoNumbers() {
+        assertEquals(6, calculator.multiply(2, 3));
+    }
+
+    @Test
     void classifiesValues() {
         assertEquals("positive", calculator.classify(4));
         assertEquals("negative", calculator.classify(-4));
